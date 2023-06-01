@@ -1,116 +1,110 @@
+use device_query::{DeviceQuery, DeviceState, MouseState};
 use enigo::*;
-use device_query::{DeviceQuery, DeviceState, Keycode, MouseState};
+use quad_gamepad::{ControllerContext, ControllerState};
+use std::{thread, time};
 
-use pasts::Loop;
-use std::task::Poll::{self, Pending, Ready};
-use stick::{Controller, Event, Listener};
+const WAIT_TIME: u32 = 1;
 
-type Exit = usize;
-
-
-struct State {
-    listener: Listener,
-    controllers: Vec<Controller>,
-    rumble: (f32, f32),
-    x: i32,
-    y: i32,
+fn wait(milli_seconds: u32) {
+    let time_millis = time::Duration::from_millis(milli_seconds.into());
+    thread::sleep(time_millis);
 }
 
-impl State {
-    fn connect(&mut self, controller: Controller) -> Poll<Exit> {
-        println!(
-            "Connected p{}, id: {:016X}, name: {}",
-            self.controllers.len() + 1,
-            controller.id(),
-            controller.name(),
-        );
-        self.controllers.push(controller);
-        Pending
+fn key_input_handler(controller: &mut ControllerContext, enigo: &mut Enigo) {
+    controller.update();
+    let state = controller.state(0);
+    println!("digita_state: {:?}", state.digital_state);
+
+    let b = state.digital_state[0];
+    let a = state.digital_state[0];
+    let y = state.digital_state[2];
+    let l = state.digital_state[8];
+    let r = state.digital_state[10];
+    let select = state.digital_state[14];
+
+    let prev_b = state.digital_state_prev[0];
+    let prev_a = state.digital_state_prev[1];
+    let prev_y = state.digital_state_prev[2];
+    let prev_l = state.digital_state_prev[8];
+    let prev_r = state.digital_state_prev[10];
+    let prev_select = state.digital_state_prev[14];
+
+    let button_delay: u32 = 350;
+    if b && b != prev_b {
+        enigo.mouse_click(MouseButton::Left);
+        wait(button_delay);
     }
-
-    fn event(&mut self, id: usize, event: Event) -> Poll<Exit> {
-        let device_state = DeviceState::new();
-        let mut enigo = Enigo::new();
-
-        let player = id + 1;
-        println!("p{}: {}", player, event);
-        println!("x{}, y{}", self.x, self.y);
-
-
-        match event {
-            Event::Disconnect => {
-               self.controllers.swap_remove(id);
-            }
-            Event::MenuR(true) => return Ready(player),
-            Event::ActionA(pressed) => {
-                self.controllers[id].rumble(f32::from(u8::from(pressed)));
-            }
-            Event::ActionB(pressed) => {
-                self.controllers[id].rumble(0.5 * f32::from(u8::from(pressed)));
-            }
-            Event::BumperL(pressed) => {
-                self.rumble.0 = f32::from(u8::from(pressed));
-                self.controllers[id].rumble(self.rumble);
-            }
-            Event::BumperR(pressed) => {
-                self.rumble.1 = f32::from(u8::from(pressed));
-                self.controllers[id].rumble(self.rumble);
-            }
-            Event::JoyX(x) => {
-                self.x = x as i32;
-            }
-            Event::JoyY(y) => {
-                self.y = y as i32
-            }
-            Event::Bumper(pressed) => {
-                enigo.mouse_click(MouseButton::Left);
-            }
-            Event::ActionL(press) => {
-                enigo.key_click(Key::Layout('a'));
-                enigo.key_click(Key::Layout('a'));
-                enigo.key_click(Key::Layout('a'));
-                enigo.key_click(Key::Layout('a'));
-                enigo.key_click(Key::Layout('a'));
-                enigo.key_click(Key::Layout('a'));
-                enigo.key_click(Key::Layout('a'));
-            }
-            Event::Number(1, pressed) => {
-                enigo.key_click(Key::Layout('d'));
-                enigo.key_click(Key::Layout('d'));
-                enigo.key_click(Key::Layout('d'));
-                enigo.key_click(Key::Layout('d'));
-                enigo.key_click(Key::Layout('d'));
-                enigo.key_click(Key::Layout('d'));
-                enigo.key_click(Key::Layout('d'));
-            }
-            _ => {
-                enigo.mouse_move_relative(self.x * 30, self.y * 30);
-            }
-
-        }
-
-        enigo.mouse_move_relative(self.x * 30, self.y * 30);
-        Pending
+    if y && y != prev_y {
+        enigo.mouse_click(MouseButton::Right);
+        wait(button_delay);
     }
-}
+    if r || prev_r {
+        enigo.key_click(Key::Layout('a'));
+    }
+    if l || prev_l {
+        enigo.key_click(Key::Layout('d'));
+    }
+    if select || prev_select {}
 
-async fn event_loop() {
-    let mut state = State {
-        listener: Listener::default(),
-        controllers: Vec::new(),
-        rumble: (0.0, 0.0),
-        x: 0,
-        y: 0,
-    };
+    let analog = state.analog_state;
 
-    let player_id = Loop::new(&mut state)
-        .when(|s| &mut s.listener, State::connect)
-        .poll(|s| &mut s.controllers, State::event)
-        .await;
+    let rel_x = analog[0].ceil();
+    let rel_y = analog[1].ceil();
 
-    println!("p{} ended the session", player_id);
+    println!("{}, {}", rel_x, rel_y);
+    println!("{} {}", b, y);
+
+    if rel_x != 0.0 || rel_y != 0.0 {
+        enigo.mouse_move_relative(rel_x as i32, rel_y as i32);
+        wait(WAIT_TIME);
+    }
 }
 
 fn main() {
-    pasts::block_on(event_loop());
+    let mut enigo = Enigo::new();
+    let device_state = DeviceState::new();
+
+    let mouse_pos = device_state.get_mouse();
+
+    let mut controller = match ControllerContext::new() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let _info = controller.info(0);
+
+    loop {
+        key_input_handler(&mut controller, &mut enigo);
+        // controller.update();
+        // let state = controller.state(0);
+        // // println!("digita_state: {:?}", state.digital_state);
+        //
+        // let mouse: MouseState = DeviceQuery::get_mouse(&device_state);
+        //
+        // let _mpos = mouse.coords.clone();
+        //
+        // let b1 = state.digital_state_prev[0];
+        // let b2 = state.digital_state_prev[2];
+        //
+        // let button_delay: u32 = 350;
+        // if b1 {
+        //     enigo.mouse_click(MouseButton::Left);
+        //     wait(button_delay);
+        // }
+        // if b2 {
+        //     enigo.mouse_click(MouseButton::Right);
+        //     wait(button_delay);
+        // }
+        //
+        // let analog = state.analog_state;
+        //
+        // let x = analog[0].ceil();
+        // let y = analog[1].ceil();
+        //
+        // println!("{}, {}", x, y);
+        // println!("{} {}", b1, b2);
+        //
+        // enigo.mouse_move_relative(x as i32, y as i32);
+        // wait(WAIT_TIME);
+    }
 }
